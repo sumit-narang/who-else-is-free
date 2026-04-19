@@ -178,7 +178,7 @@ const PastEventsScreen = () => {
           style={styles.backButton}
           hitSlop={8}
         >
-          <Feather name="chevron-left" size={24} color="#707070" />
+          <Feather name="chevron-left" size={20} color={colors.text} />
         </Pressable>
         <Text style={styles.headerTitle}>Past Events</Text>
       </View>
@@ -240,22 +240,20 @@ const styles = StyleSheet.create({
   header: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 4,
     paddingTop: spacing.lg - spacing.md,
     paddingBottom: spacing.md,
-    gap: spacing.sm,
   },
   backButton: {
-    paddingRight: spacing.xs,
-    paddingVertical: spacing.xs,
-    alignItems: "center",
+    width: 32,
+    height: 44,
     justifyContent: "center",
   },
   headerTitle: {
-    fontSize: typography.header,
-    fontFamily: typography.fontFamilySemiBold,
+    fontSize: 18,
+    fontFamily: typography.fontFamilyMedium,
     color: colors.text,
-    lineHeight: typography.lineHeight,
-    letterSpacing: typography.letterSpacing,
+    letterSpacing: -0.4,
   },
   listContent: {
     paddingBottom: spacing.xl,

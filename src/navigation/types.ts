@@ -32,6 +32,7 @@ export type RootStackParamList = {
   };
   ChatThread: undefined;
   CreateEvent: { editEventId?: string | null } | undefined;
+  EditProfile: undefined;
   PastEvents: undefined;
   PrivacyPolicy: undefined;
   Help: undefined;
