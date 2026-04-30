@@ -51,6 +51,7 @@ interface AuthContextValue {
   signOut: () => void;
   refreshSessionSilently: () => Promise<string | null>;
   updateProfile: (data: ProfileUpdateData) => Promise<AuthUser>;
+  deleteAccount: () => Promise<void>;
   handleSessionExpired: () => void;
   authFetch: (
     input: RequestInfo | URL,
@@ -266,14 +267,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [authProvider, signInWithGoogle]);
 
-  const signOut = useCallback(() => {
+  const clearStoredSession = useCallback(async () => {
     setUser(null);
     setToken(null);
     setAuthProvider(null);
-    void SecureStore.deleteItemAsync(TOKEN_KEY);
-    void SecureStore.deleteItemAsync(USER_KEY);
-    void SecureStore.deleteItemAsync(AUTH_PROVIDER_KEY);
+
+    await Promise.all([
+      SecureStore.deleteItemAsync(TOKEN_KEY),
+      SecureStore.deleteItemAsync(USER_KEY),
+      SecureStore.deleteItemAsync(AUTH_PROVIDER_KEY),
+    ]);
   }, []);
+
+  const signOut = useCallback(() => {
+    void clearStoredSession();
+  }, [clearStoredSession]);
 
   const handleSessionExpired = useCallback(() => {
     signOut();
@@ -385,6 +393,34 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     [authFetch, token],
   );
 
+  const deleteAccount = useCallback(async (): Promise<void> => {
+    if (!token) {
+      throw new Error("Not authenticated");
+    }
+
+    const response = await authFetch(`${API_BASE_URL}/api/profile`, {
+      method: "DELETE",
+    });
+
+    if (!response.ok) {
+      const errorData = (await response.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      const message =
+        errorData.error ||
+        (response.status === 401
+          ? "Session expired. Please sign in again."
+          : "Failed to delete account");
+      const apiError = new Error(message) as ApiError;
+      apiError.status = response.status;
+      throw apiError;
+    }
+
+    // Clear local auth only after the server confirms the account was deleted.
+    // If the API fails, keeping the session avoids stranding the user locally.
+    await clearStoredSession();
+  }, [authFetch, clearStoredSession, token]);
+
   const value = useMemo(
     () => ({
       user,
@@ -395,6 +431,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       signOut,
       refreshSessionSilently,
       updateProfile,
+      deleteAccount,
       handleSessionExpired,
       authFetch,
     }),
@@ -407,6 +444,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       signOut,
       refreshSessionSilently,
       updateProfile,
+      deleteAccount,
       handleSessionExpired,
       authFetch,
     ],

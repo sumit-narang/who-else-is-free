@@ -29,10 +29,11 @@ func setupRouter(eventHandler *EventHandler, authHandler *AuthHandler, profileHa
 	eventHandler.RegisterRoutes(api)
 
 	protected := api.Group("")
-	protected.Use(sessionMiddleware(signer))
+	protected.Use(sessionMiddleware(signer, eventHandler.repo))
 	eventHandler.RegisterProtectedRoutes(protected)
 	protected.POST("/events/:id/report", eventHandler.reportEvent)
 	protected.PUT("/profile", profileHandler.UpdateProfile)
+	protected.DELETE("/profile", profileHandler.DeleteProfile)
 	RegisterChatRoutes(protected, eventHandler.repo, chatHub)
 	protected.POST("/push-tokens", pushHandler.registerPushToken)
 	protected.DELETE("/push-tokens", pushHandler.deletePushToken)

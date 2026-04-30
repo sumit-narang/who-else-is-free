@@ -15,12 +15,13 @@ import { mockApiResponses, mockUsers } from '../../__tests__/mocks/mockData';
 // Test constants
 const TOKEN_KEY = 'whoelseisfree.authToken';
 const USER_KEY = 'whoelseisfree.authUser';
+const AUTH_PROVIDER_KEY = 'whoelseisfree.authProvider';
 const MOCK_TOKEN = 'mock-jwt-token';
 const MOCK_ID_TOKEN = 'mock-google-id-token';
 
 // Test component that consumes the AuthContext
 const TestConsumer = () => {
-  const { user, token, isSigningIn, signInWithGoogle, signOut, updateProfile, authFetch } = useAuth();
+  const { user, token, isSigningIn, signInWithGoogle, signOut, updateProfile, deleteAccount, authFetch } = useAuth();
   const [authFetchStatus, setAuthFetchStatus] = React.useState('idle');
 
   const handleSignIn = async () => {
@@ -34,6 +35,14 @@ const TestConsumer = () => {
   const handleUpdateProfile = async () => {
     try {
       await updateProfile({ name: 'Updated Name', gender: 'Female', age: 26 });
+    } catch {
+      // Error handled silently for test purposes
+    }
+  };
+
+  const handleDeleteAccount = async () => {
+    try {
+      await deleteAccount();
     } catch {
       // Error handled silently for test purposes
     }
@@ -63,6 +72,7 @@ const TestConsumer = () => {
       <Button testID="sign-in-button" title="Sign In" onPress={handleSignIn} />
       <Button testID="sign-out-button" title="Sign Out" onPress={signOut} />
       <Button testID="update-profile-button" title="Update Profile" onPress={handleUpdateProfile} />
+      <Button testID="delete-account-button" title="Delete Account" onPress={handleDeleteAccount} />
       <Button testID="auth-fetch-button" title="Auth Fetch" onPress={handleConcurrentAuthFetch} />
     </View>
   );
@@ -345,6 +355,61 @@ describe('AuthContext Rendering Tests', () => {
           USER_KEY,
           expect.stringContaining('Updated Name')
         );
+      });
+    });
+  });
+
+  describe('deleteAccount Flow', () => {
+    it('should call delete profile API and clear local session after success', async () => {
+      const storedUser = mockUsers[0];
+      mockSecureStore.storage.set(TOKEN_KEY, MOCK_TOKEN);
+      mockSecureStore.storage.set(USER_KEY, JSON.stringify(storedUser));
+      mockSecureStore.storage.set(AUTH_PROVIDER_KEY, 'google');
+      fetchMock.mockResponseOnce(JSON.stringify({ message: 'account deleted' }));
+
+      renderWithAuthProvider();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('Ava Test');
+      });
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('delete-account-button'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('No User');
+        expect(screen.getByTestId('token')).toHaveTextContent('No Token');
+      });
+
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining('/api/profile'),
+        expect.objectContaining({ method: 'DELETE' })
+      );
+      expect(mockSecureStore.deleteItemAsync).toHaveBeenCalledWith(TOKEN_KEY);
+      expect(mockSecureStore.deleteItemAsync).toHaveBeenCalledWith(USER_KEY);
+      expect(mockSecureStore.deleteItemAsync).toHaveBeenCalledWith(AUTH_PROVIDER_KEY);
+    });
+
+    it('should keep the current user when account deletion fails', async () => {
+      const storedUser = mockUsers[0];
+      mockSecureStore.storage.set(TOKEN_KEY, MOCK_TOKEN);
+      mockSecureStore.storage.set(USER_KEY, JSON.stringify(storedUser));
+      fetchMock.mockResponseOnce(JSON.stringify({ error: 'failed to delete account' }), { status: 500 });
+
+      renderWithAuthProvider();
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('Ava Test');
+      });
+
+      await act(async () => {
+        fireEvent.press(screen.getByTestId('delete-account-button'));
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('user-name')).toHaveTextContent('Ava Test');
+        expect(screen.getByTestId('token')).toHaveTextContent(MOCK_TOKEN);
       });
     });
   });

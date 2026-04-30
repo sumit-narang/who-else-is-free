@@ -4,8 +4,7 @@
  */
 
 import React from 'react';
-import { Alert } from 'react-native';
-import { fireEvent } from '@testing-library/react-native';
+import { fireEvent, waitFor } from '@testing-library/react-native';
 
 import ProfileScreen from '../ProfileScreen';
 import {
@@ -30,10 +29,65 @@ jest.mock('@context/EventsContext', () => ({
   useEvents: jest.fn(),
 }));
 
+jest.mock('react-native-reanimated', () => {
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: { View },
+    useAnimatedStyle: (factory: () => object) => factory(),
+    useSharedValue: (value: unknown) => ({ value }),
+    withSpring: (value: unknown) => value,
+  };
+});
+
 // Mock components
 jest.mock('@components/ScreenContainer', () => {
   const { View } = require('react-native');
   return ({ children }: { children: React.ReactNode }) => <View testID="screen-container">{children}</View>;
+});
+
+jest.mock('@components/BottomSheetModal', () => {
+  const { View } = require('react-native');
+  return ({ visible, children }: { visible: boolean; children: React.ReactNode }) =>
+    visible ? <View testID="bottom-sheet-modal">{children}</View> : null;
+});
+
+jest.mock('@components/EventActionOverlay', () => {
+  const { View, Text, Pressable } = require('react-native');
+
+  return ({
+    isVisible,
+    title,
+    description,
+    confirmLabel,
+    cancelLabel,
+    onConfirm,
+    onCancel,
+    isConfirmLoading,
+    errorMessage,
+  }: any) => {
+    if (!isVisible) {
+      return null;
+    }
+
+    return (
+      <View testID="delete-account-confirm">
+        <Text>{title}</Text>
+        <Text>{description}</Text>
+        {errorMessage ? <Text>{errorMessage}</Text> : null}
+        <Pressable
+          testID="confirm-delete-account"
+          onPress={onConfirm}
+          disabled={isConfirmLoading}
+        >
+          <Text>{isConfirmLoading ? 'Deleting...' : confirmLabel}</Text>
+        </Pressable>
+        <Pressable testID="cancel-delete-account" onPress={onCancel}>
+          <Text>{cancelLabel}</Text>
+        </Pressable>
+      </View>
+    );
+  };
 });
 
 // Mock SVG icons
@@ -64,6 +118,7 @@ const mockedUseEvents = useEvents as jest.Mock;
 
 describe('ProfileScreen Rendering', () => {
   const mockSignOut = jest.fn();
+  const mockDeleteAccount = jest.fn();
 
   const setupMocks = (overrides: {
     authOverrides?: object;
@@ -74,6 +129,7 @@ describe('ProfileScreen Rendering', () => {
       createMockUseAuth({
         user: mockUsers[0],
         signOut: mockSignOut,
+        deleteAccount: mockDeleteAccount,
         ...overrides.authOverrides,
       })()
     );
@@ -93,7 +149,6 @@ describe('ProfileScreen Rendering', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    jest.spyOn(Alert, 'alert').mockImplementation(() => {});
   });
 
   afterEach(() => {
@@ -219,14 +274,13 @@ describe('ProfileScreen Rendering', () => {
       expect(getByText('Delete')).toBeTruthy();
     });
 
-    it('should open edit profile modal when Edit Profile is pressed', () => {
+    it('should navigate to EditProfile when Edit Profile is pressed', () => {
       setupMocks();
       const { getByText } = render(<ProfileScreen />);
 
       fireEvent.press(getByText('Edit Profile'));
 
-      // Modal should now be visible with the Edit Profile title inside it
-      expect(getByText('Save')).toBeTruthy();
+      expect(mockNavigation.navigate).toHaveBeenCalledWith('EditProfile');
     });
 
     it('should navigate to PastEvents when Past Events is pressed', () => {
@@ -256,13 +310,57 @@ describe('ProfileScreen Rendering', () => {
       expect(mockNavigation.navigate).toHaveBeenCalledWith('Help');
     });
 
-    it('should show alert when Delete is pressed', () => {
+    it('should show account delete confirmation when Delete is pressed', () => {
       setupMocks();
-      const { getByText } = render(<ProfileScreen />);
+      const { getByText, getByTestId } = render(<ProfileScreen />);
 
       fireEvent.press(getByText('Delete'));
 
-      expect(Alert.alert).toHaveBeenCalledWith('Delete Account', 'Coming Soon');
+      expect(getByTestId('delete-account-confirm')).toBeTruthy();
+      expect(getByText('Delete your account?')).toBeTruthy();
+      expect(getByText('Delete account')).toBeTruthy();
+      expect(getByText('Keep account')).toBeTruthy();
+    });
+
+    it('should close delete confirmation without calling API when cancelled', () => {
+      setupMocks();
+      const { getByText, getByTestId, queryByTestId } = render(<ProfileScreen />);
+
+      fireEvent.press(getByText('Delete'));
+      expect(getByTestId('delete-account-confirm')).toBeTruthy();
+
+      fireEvent.press(getByTestId('cancel-delete-account'));
+
+      expect(mockDeleteAccount).not.toHaveBeenCalled();
+      expect(queryByTestId('delete-account-confirm')).toBeNull();
+    });
+
+    it('should call deleteAccount when delete confirmation is confirmed', async () => {
+      mockDeleteAccount.mockResolvedValueOnce(undefined);
+      setupMocks();
+      const { getByText, getByTestId } = render(<ProfileScreen />);
+
+      fireEvent.press(getByText('Delete'));
+      fireEvent.press(getByTestId('confirm-delete-account'));
+
+      await waitFor(() => {
+        expect(mockDeleteAccount).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it('should keep confirmation open and show an error when delete fails', async () => {
+      jest.spyOn(console, 'error').mockImplementation(() => {});
+      mockDeleteAccount.mockRejectedValueOnce(new Error('Unable to delete account'));
+      setupMocks();
+      const { getByText, getByTestId } = render(<ProfileScreen />);
+
+      fireEvent.press(getByText('Delete'));
+      fireEvent.press(getByTestId('confirm-delete-account'));
+
+      await waitFor(() => {
+        expect(getByText('Unable to delete account')).toBeTruthy();
+      });
+      expect(getByTestId('delete-account-confirm')).toBeTruthy();
     });
   });
 
@@ -321,11 +419,13 @@ describe('ProfileScreen Rendering', () => {
   });
 
   describe('Profile Header Card', () => {
-    it('should render gradient background', () => {
+    it('should render the profile header card content', () => {
       setupMocks();
-      const { getByTestId } = render(<ProfileScreen />);
+      const { getByText } = render(<ProfileScreen />);
 
-      expect(getByTestId('linear-gradient')).toBeTruthy();
+      expect(getByText('Ava Test')).toBeTruthy();
+      expect(getByText('Hosted')).toBeTruthy();
+      expect(getByText('Joined')).toBeTruthy();
     });
 
     it('should display default name when user name is null', () => {

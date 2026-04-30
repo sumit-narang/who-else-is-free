@@ -127,7 +127,7 @@ func setupAPITestEnvWithPush(t *testing.T, pushSender PushSender) *apiTestEnv {
 	hub := NewChatHub(repo, signer, pushSender)
 	eventHandler := NewEventHandler(repo, hub)
 	authHandler := NewAuthHandler(repo, signer)
-	profileHandler := NewProfileHandler(repo)
+	profileHandler := NewProfileHandler(repo, hub)
 	go hub.Run()
 	pushHandler := NewPushHandler(repo, pushSender)
 
@@ -217,6 +217,15 @@ func decodeJSON[T any](t *testing.T, resp *http.Response) T {
 		t.Fatalf("decode json: %v", err)
 	}
 	return out
+}
+
+func queryCount(t *testing.T, db *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRowContext(context.Background(), query, args...).Scan(&count); err != nil {
+		t.Fatalf("query count: %v", err)
+	}
+	return count
 }
 
 type eventsResponse struct {
@@ -3145,6 +3154,245 @@ func TestUpdateProfile(t *testing.T) {
 		resp := env.doRequest(t, http.MethodPut, "/api/profile", token, body)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+	})
+}
+
+func TestDeleteProfile(t *testing.T) {
+	createUser := func(t *testing.T, env *apiTestEnv, name, email string) *User {
+		t.Helper()
+		ctx := context.Background()
+		if _, err := env.db.ExecContext(ctx, `
+			INSERT INTO users (name, email, password, profile_complete, created_at)
+			VALUES (?, ?, '', 1, datetime('now'))
+		`, name, email); err != nil {
+			t.Fatalf("create user %s: %v", email, err)
+		}
+		user, err := env.repo.GetUserByEmail(ctx, email)
+		if err != nil {
+			t.Fatalf("load user %s: %v", email, err)
+		}
+		return user
+	}
+
+	createEvent := func(t *testing.T, env *apiTestEnv, token, title, groupType string) int64 {
+		t.Helper()
+		body := CreateEventParams{
+			Title:       title,
+			Location:    "Delete Profile Test Location",
+			Time:        "18:00",
+			EventDate:   time.Now().Add(72 * time.Hour).Format("2006-01-02"),
+			Description: "Delete profile integration test",
+			Gender:      "Any",
+			MinAge:      18,
+			MaxAge:      50,
+			GroupType:   groupType,
+			CoverKey:    defaultCoverKey,
+		}
+		resp := env.doRequest(t, http.MethodPost, "/api/events", token, body)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create event: expected 201, got %d", resp.StatusCode)
+		}
+		return decodeJSON[createEventResponse](t, resp).ID
+	}
+
+	requestAndApprove := func(t *testing.T, env *apiTestEnv, eventID, requesterID int64, requesterToken, hostToken string) {
+		t.Helper()
+		resp := env.doRequest(
+			t,
+			http.MethodPost,
+			fmt.Sprintf("/api/events/%d/chat/requests", eventID),
+			requesterToken,
+			map[string]string{"message": "Please add me"},
+		)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create join request: expected 201, got %d", resp.StatusCode)
+		}
+		resp = env.doRequest(
+			t,
+			http.MethodPost,
+			fmt.Sprintf("/api/events/%d/chat/requests/%d/approve", eventID, requesterID),
+			hostToken,
+			nil,
+		)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("approve join request: expected 200, got %d", resp.StatusCode)
+		}
+	}
+
+	t.Run("deletes account with no related event data and rejects old token", func(t *testing.T) {
+		env := setupAPITestEnv(t)
+		user := createUser(t, env, "Delete Plain", "delete-plain@example.com")
+		token := env.issueTokenForEmail(t, user.Email)
+
+		if err := env.repo.UpsertPushToken(context.Background(), user.ID, "ExponentPushToken[plain]", "device-plain", "ios"); err != nil {
+			t.Fatalf("upsert push token: %v", err)
+		}
+		if err := env.repo.LinkAppleAccount(context.Background(), "delete-plain-apple-sub", user.ID, user.Email); err != nil {
+			t.Fatalf("link apple account: %v", err)
+		}
+
+		resp := env.doRequest(t, http.MethodDelete, "/api/profile", token, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM users WHERE id = ?`, user.ID) != 0 {
+			t.Fatal("expected user row to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM push_tokens WHERE user_id = ?`, user.ID) != 0 {
+			t.Fatal("expected push tokens to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM apple_accounts WHERE user_id = ?`, user.ID) != 0 {
+			t.Fatal("expected apple account links to be deleted")
+		}
+
+		resp = env.doRequest(t, http.MethodGet, "/api/events/past", token, nil)
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Fatalf("expected stale token to return 401, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("removes pending join requests created by deleting user", func(t *testing.T) {
+		env := setupAPITestEnv(t)
+		host := createUser(t, env, "Delete Pending Host", "delete-pending-host@example.com")
+		requester := createUser(t, env, "Delete Pending Requester", "delete-pending-requester@example.com")
+		hostToken := env.issueTokenForEmail(t, host.Email)
+		requesterToken := env.issueTokenForEmail(t, requester.Email)
+		eventID := createEvent(t, env, hostToken, "Pending Request Delete", "Group")
+
+		resp := env.doRequest(
+			t,
+			http.MethodPost,
+			fmt.Sprintf("/api/events/%d/chat/requests", eventID),
+			requesterToken,
+			map[string]string{"message": "Pending delete"},
+		)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("expected 201, got %d", resp.StatusCode)
+		}
+
+		resp = env.doRequest(t, http.MethodDelete, "/api/profile", requesterToken, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_join_requests WHERE event_id = ? AND user_id = ?`, eventID, requester.ID) != 0 {
+			t.Fatal("expected pending join request to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM events WHERE id = ?`, eventID) != 1 {
+			t.Fatal("expected host event to remain")
+		}
+	})
+
+	t.Run("removes approved group member while keeping event and remaining chat", func(t *testing.T) {
+		env := setupAPITestEnv(t)
+		host := createUser(t, env, "Delete Group Host", "delete-group-host@example.com")
+		member := createUser(t, env, "Delete Group Member", "delete-group-member@example.com")
+		hostToken := env.issueTokenForEmail(t, host.Email)
+		memberToken := env.issueTokenForEmail(t, member.Email)
+		eventID := createEvent(t, env, hostToken, "Group Member Delete", "Group")
+		requestAndApprove(t, env, eventID, member.ID, memberToken, hostToken)
+
+		convo, err := env.repo.GetConversationByEventID(context.Background(), eventID)
+		if err != nil {
+			t.Fatalf("get group conversation: %v", err)
+		}
+		if _, err := env.repo.CreateMessage(context.Background(), CreateMessageParams{
+			ConversationID: convo.ID,
+			SenderID:       member.ID,
+			Body:           "Delete my group message",
+			DeliveryStatus: "sent",
+		}); err != nil {
+			t.Fatalf("create member message: %v", err)
+		}
+
+		resp := env.doRequest(t, http.MethodDelete, "/api/profile", memberToken, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM events WHERE id = ?`, eventID) != 1 {
+			t.Fatal("expected group event to remain")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversations WHERE id = ?`, convo.ID) != 1 {
+			t.Fatal("expected group conversation to remain")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_members WHERE conversation_id = ? AND user_id = ?`, convo.ID, member.ID) != 0 {
+			t.Fatal("expected deleted user to be removed from group conversation")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_members WHERE conversation_id = ? AND user_id = ?`, convo.ID, host.ID) != 1 {
+			t.Fatal("expected host to remain in group conversation")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM messages WHERE sender_id = ?`, member.ID) != 0 {
+			t.Fatal("expected deleted user's group messages to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_join_requests WHERE event_id = ? AND user_id = ?`, eventID, member.ID) != 0 {
+			t.Fatal("expected approved join request to be deleted")
+		}
+	})
+
+	t.Run("removes approved single member private chat while keeping host event", func(t *testing.T) {
+		env := setupAPITestEnv(t)
+		host := createUser(t, env, "Delete Single Host", "delete-single-host@example.com")
+		member := createUser(t, env, "Delete Single Member", "delete-single-member@example.com")
+		hostToken := env.issueTokenForEmail(t, host.Email)
+		memberToken := env.issueTokenForEmail(t, member.Email)
+		eventID := createEvent(t, env, hostToken, "Single Member Delete", "Single")
+		requestAndApprove(t, env, eventID, member.ID, memberToken, hostToken)
+
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversations WHERE event_id = ?`, eventID) == 0 {
+			t.Fatal("expected approved single event private conversation before delete")
+		}
+
+		resp := env.doRequest(t, http.MethodDelete, "/api/profile", memberToken, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM events WHERE id = ?`, eventID) != 1 {
+			t.Fatal("expected host event to remain")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversations WHERE event_id = ?`, eventID) != 0 {
+			t.Fatal("expected private single-event conversation to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_join_requests WHERE event_id = ? AND user_id = ?`, eventID, member.ID) != 0 {
+			t.Fatal("expected approved single join request to be deleted")
+		}
+	})
+
+	t.Run("deletes hosted events and dependent chat data when host deletes account", func(t *testing.T) {
+		env := setupAPITestEnv(t)
+		host := createUser(t, env, "Delete Owner", "delete-owner@example.com")
+		member := createUser(t, env, "Delete Owner Member", "delete-owner-member@example.com")
+		hostToken := env.issueTokenForEmail(t, host.Email)
+		memberToken := env.issueTokenForEmail(t, member.Email)
+		eventID := createEvent(t, env, hostToken, "Hosted Event Delete", "Group")
+		requestAndApprove(t, env, eventID, member.ID, memberToken, hostToken)
+
+		convo, err := env.repo.GetConversationByEventID(context.Background(), eventID)
+		if err != nil {
+			t.Fatalf("get hosted event conversation: %v", err)
+		}
+
+		resp := env.doRequest(t, http.MethodDelete, "/api/profile", hostToken, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200, got %d", resp.StatusCode)
+		}
+
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM users WHERE id = ?`, host.ID) != 0 {
+			t.Fatal("expected host user to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM users WHERE id = ?`, member.ID) != 1 {
+			t.Fatal("expected joined member account to remain")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM events WHERE id = ?`, eventID) != 0 {
+			t.Fatal("expected hosted event to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversations WHERE id = ?`, convo.ID) != 0 {
+			t.Fatal("expected hosted event conversation to be deleted")
+		}
+		if queryCount(t, env.db, `SELECT COUNT(1) FROM conversation_join_requests WHERE event_id = ?`, eventID) != 0 {
+			t.Fatal("expected hosted event join requests to be deleted")
 		}
 	})
 }

@@ -54,7 +54,7 @@ func main() {
 
 	eventHandler := NewEventHandler(repo, chatHub)
 	authHandler := NewAuthHandler(repo, signer)
-	profileHandler := NewProfileHandler(repo)
+	profileHandler := NewProfileHandler(repo, chatHub)
 	pushHandler := NewPushHandler(repo, pushSender)
 	go chatHub.Run()
 	srv := setupRouter(eventHandler, authHandler, profileHandler, chatHub, pushHandler, signer)

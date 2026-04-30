@@ -1,5 +1,4 @@
 import {
-  Alert,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -25,6 +24,7 @@ import { useEvents } from "@context/EventsContext";
 import { useChat } from "@context/ChatContext";
 import { RootStackParamList, RootTabParamList } from "@navigation/types";
 import BottomSheetModal from "@components/BottomSheetModal";
+import EventActionOverlay from "@components/EventActionOverlay";
 import SignInButtons from "@components/SignInButtons";
 import EditProfileIcon from "@assets/account-icons/edit.svg";
 import PastEventsIcon from "@assets/account-icons/past event.svg";
@@ -82,10 +82,13 @@ const MenuItem = ({
 };
 
 const ProfileScreen = () => {
-  const { user, signOut } = useAuth();
+  const { user, signOut, deleteAccount } = useAuth();
   const { events, userEvents } = useEvents();
   const { conversations } = useChat();
   const navigation = useNavigation<ProfileNavigation>();
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isDeletingAccount, setIsDeletingAccount] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   // Calculate stats
   const hostedCount = userEvents.length;
@@ -140,8 +143,39 @@ const ProfileScreen = () => {
   }, [navigation]);
 
   const handleDelete = useCallback(() => {
-    Alert.alert("Delete Account", "Coming Soon");
+    setDeleteError(null);
+    setShowDeleteConfirm(true);
   }, []);
+
+  const handleDeleteCancel = useCallback(() => {
+    if (isDeletingAccount) {
+      return;
+    }
+    setDeleteError(null);
+    setShowDeleteConfirm(false);
+  }, [isDeletingAccount]);
+
+  const handleDeleteAccount = useCallback(async () => {
+    if (isDeletingAccount) {
+      return;
+    }
+
+    try {
+      setIsDeletingAccount(true);
+      setDeleteError(null);
+      await deleteAccount();
+      setShowDeleteConfirm(false);
+    } catch (error) {
+      console.error("Failed to delete account", error);
+      setDeleteError(
+        error instanceof Error
+          ? error.message
+          : "Unable to delete account. Please try again.",
+      );
+    } finally {
+      setIsDeletingAccount(false);
+    }
+  }, [deleteAccount, isDeletingAccount]);
 
   const [signInVisible, setSignInVisible] = useState(false);
 
@@ -187,6 +221,20 @@ const ProfileScreen = () => {
         <BottomSheetModal visible={signInVisible} onClose={() => setSignInVisible(false)}>
           <SignInButtons />
         </BottomSheetModal>
+        <EventActionOverlay
+          isVisible={showDeleteConfirm}
+          onBackdropPress={handleDeleteCancel}
+          type="confirm"
+          title="Delete your account?"
+          description="This will permanently delete your profile, hosted events, event memberships, and chats. This can't be undone."
+          confirmLabel="Delete account"
+          cancelLabel="Keep account"
+          confirmTone="destructive"
+          onConfirm={handleDeleteAccount}
+          onCancel={handleDeleteCancel}
+          isConfirmLoading={isDeletingAccount}
+          errorMessage={deleteError}
+        />
       </ScreenContainer>
     );
   }
@@ -274,6 +322,20 @@ const ProfileScreen = () => {
           />
         </View>
       </ScrollView>
+      <EventActionOverlay
+        isVisible={showDeleteConfirm}
+        onBackdropPress={handleDeleteCancel}
+        type="confirm"
+        title="Delete your account?"
+        description="This will permanently delete your profile, hosted events, event memberships, and chats. This can't be undone."
+        confirmLabel="Delete account"
+        cancelLabel="Keep account"
+        confirmTone="destructive"
+        onConfirm={handleDeleteAccount}
+        onCancel={handleDeleteCancel}
+        isConfirmLoading={isDeletingAccount}
+        errorMessage={deleteError}
+      />
     </ScreenContainer>
   );
 };

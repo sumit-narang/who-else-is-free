@@ -126,6 +126,7 @@ export const mockAuthValues: MockAuthContextValue = {
   signOut: jest.fn(),
   refreshSessionSilently: jest.fn().mockResolvedValue(null),
   updateProfile: jest.fn(),
+  deleteAccount: jest.fn().mockResolvedValue(undefined),
   handleSessionExpired: jest.fn(),
   authFetch: jest.fn(),
 };
@@ -301,6 +302,7 @@ interface MockAuthContextValue {
   signOut: jest.Mock;
   refreshSessionSilently: jest.Mock;
   updateProfile: jest.Mock;
+  deleteAccount: jest.Mock;
   handleSessionExpired: jest.Mock;
   authFetch: jest.Mock;
 }
@@ -314,6 +316,7 @@ const defaultMockAuthContext: MockAuthContextValue = {
   signOut: jest.fn(),
   refreshSessionSilently: jest.fn().mockResolvedValue(null),
   updateProfile: jest.fn(),
+  deleteAccount: jest.fn().mockResolvedValue(undefined),
   handleSessionExpired: jest.fn(),
   authFetch: jest.fn(),
 };

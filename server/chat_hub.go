@@ -325,6 +325,22 @@ func (h *ChatHub) handleWebSocket(c *gin.Context) {
 
 	userID := claims.UserID
 
+	ctx, cancel := context.WithTimeout(c.Request.Context(), requestTimeout)
+	defer cancel()
+
+	// JWTs are stateless, so a token from another device can outlive account
+	// deletion. Check the user row before upgrading so deleted accounts cannot
+	// keep opening new chat sockets.
+	if _, err := h.repo.GetUserByID(ctx, userID); err != nil {
+		if errors.Is(err, ErrUserNotFound) {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "session expired, please sign in again"})
+			return
+		}
+		log.Printf("websocket user validation failed for %d: %v", userID, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to validate session"})
+		return
+	}
+
 	// Upgrade the HTTP request into a WebSocket connection. From here on the
 	// client and server communicate using frames handled by read/write pumps.
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)
@@ -333,8 +349,6 @@ func (h *ChatHub) handleWebSocket(c *gin.Context) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(c.Request.Context(), requestTimeout)
-	defer cancel()
 	conversations, err := h.repo.ListConversations(ctx, userID)
 	if err != nil {
 		log.Printf("list conversations failed: %v", err)
