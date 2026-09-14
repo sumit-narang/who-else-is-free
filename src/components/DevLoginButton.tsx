@@ -7,7 +7,7 @@ import { AppButton } from '@components/ui';
 import { useAuth } from '@context/AuthContext';
 import { RootStackParamList } from '@navigation/types';
 import { logger } from '@services/logger';
-import { colors, spacing } from '@theme/index';
+import { colors, spacing, typography } from '@theme/index';
 
 /**
  * DEV ONLY. Bypasses Google/Apple sign-in by calling /api/dev-login, which is
@@ -104,6 +104,7 @@ const styles = StyleSheet.create({
   errorText: {
     color: colors.error,
     fontSize: 12,
+    fontFamily: typography.fontFamilyRegular,
     textAlign: 'center',
   },
 });

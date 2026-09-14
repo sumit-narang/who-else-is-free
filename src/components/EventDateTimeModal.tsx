@@ -4,7 +4,7 @@ import { InteractionManager, Pressable, ScrollView, StyleSheet, Text, View } fro
 import { LinearGradient } from 'expo-linear-gradient';
 
 import { triggerHaptic } from '@services/haptics';
-import { colors } from '@theme/index';
+import { colors, typography } from '@theme/index';
 import {
   clampDateTime,
   getPickerSectionDateLabel,
@@ -467,6 +467,7 @@ const errorStyle = StyleSheet.create({
   text: {
     textAlign: 'center',
     fontSize: 13,
+    fontFamily: typography.fontFamilyRegular,
     color: colors.error,
     marginBottom: 8,
   },

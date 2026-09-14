@@ -425,10 +425,12 @@ const styles = StyleSheet.create({
   },
   helperText: {
     fontSize: typography.caption,
+    fontFamily: typography.fontFamilyRegular,
     color: colors.muted,
   },
   errorText: {
     fontSize: typography.caption,
+    fontFamily: typography.fontFamilyRegular,
     color: colors.accent,
   },
 

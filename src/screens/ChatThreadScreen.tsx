@@ -766,6 +766,7 @@ const styles = StyleSheet.create({
   },
   errorText: {
     fontSize: typography.caption,
+    fontFamily: typography.fontFamilyRegular,
     color: colors.accent,
   },
   threadContainer: {
