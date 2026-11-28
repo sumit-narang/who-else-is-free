@@ -60,7 +60,7 @@ type NotificationNotice = 'unavailable';
 // (useDiscoverLocation). The Nearby chip switches precise location on and off.
 const sortOptions: Array<{ label: string; value: SortOptionValue }> = [
   { label: 'Upcoming', value: 'upcoming' },
-  { label: 'Newest', value: 'newest' },
+  { label: 'Newest created', value: 'newest' },
 ];
 
 const HomeScreen = () => {
