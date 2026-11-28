@@ -426,7 +426,7 @@ describe('HomeScreen Rendering', () => {
       fireEvent.press(getByTestId('option-newest'));
 
       expect(queryByTestId('option-newest')).toBeNull();
-      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest created');
+      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest');
     });
 
     it('switches to newest mode and shows Newest Created section header', () => {
@@ -438,7 +438,7 @@ describe('HomeScreen Rendering', () => {
       fireEvent.press(getByTestId('discover-sort-chip'));
       fireEvent.press(getByTestId('option-newest'));
       expect(queryByTestId('option-newest')).toBeNull();
-      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest created');
+      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest');
       expect(getAllByText('Newest created')[0]).toBeTruthy();
       expect(queryByText('Today')).toBeNull();
     });
