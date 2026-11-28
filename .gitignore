@@ -67,6 +67,9 @@ privacy-policy-screen.png
 # the images themselves stay out of the public repo.
 server/assets/covers/*.png
 
+# IP-to-city database (~130 MB) is fetched at deploy time (cmd/geoip-sync).
+server/assets/geoip/
+
 # Local release APKs and full emulator performance traces
 /artifacts/animation-performance/
 

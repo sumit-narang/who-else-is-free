@@ -83,6 +83,7 @@ func setupRouter(eventHandler *EventHandler, authHandler *AuthHandler, profileHa
 	placesHandler := NewPlacesHandler()
 	api.GET("/places/autocomplete", placesHandler.autocomplete)
 	api.GET("/places/details", placesHandler.details)
+	api.GET("/location/approximate", NewApproximateLocationHandler().approximate)
 
 	protected := api.Group("")
 	protected.Use(sessionMiddleware(signer, eventHandler.repo))

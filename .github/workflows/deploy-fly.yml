@@ -25,4 +25,4 @@ jobs:
         working-directory: server
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-        run: flyctl deploy --remote-only
+        run: flyctl deploy --remote-only --build-arg GEOIP_EDITION=$(date -u +%Y-%m)
