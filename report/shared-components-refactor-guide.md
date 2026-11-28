@@ -38,6 +38,8 @@ In this React Native app, "shared CSS" means:
 | Action toast material                         | `ActionToastSurface`                                                                   | `EventActionBadge`                                                    |
 | Frosted/translucent surface                   | `FrostedSurface`                                                                       | cover chip, avatar edit badge, hero buttons, tab bar, badges          |
 | Tabs or segmented controls                    | `AppTabs`, `SegmentedControl`                                                          | Discover, My Events                                                   |
+| Status chip (on/off, opens a sheet)           | `StatusChip`                                                                           | Discover Nearby chip                                                  |
+| Dropdown chip (current choice + opens a list) | `DropdownChip`                                                                         | Discover sort chip                                                    |
 | Sliding-underline tabs over a pager           | `SlidingTabs`                                                                          | Event Details requests/members tabs                                   |
 | Numeric count badge in a header/row           | `CountBadge`                                                                           | Chat thread header, One-to-One Hub header, Profile notifications bell |
 | Unread indicator dot on a list row            | `UnreadDot`                                                                            | Messages rows, One-to-One Hub rows, Notifications rows                |

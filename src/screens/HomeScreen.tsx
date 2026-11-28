@@ -28,41 +28,38 @@ import {
   sortEventsByCreatedAtDesc,
 } from '@components/events';
 import { emptyStateCenteredTop } from '@components/FullPageEmptyState';
+import DiscoverLocationSheet from '@components/location-permission/DiscoverLocationSheet';
 import LocationPermissionSheet from '@components/location-permission/LocationPermissionSheet';
 import ScreenContainer from '@components/ScreenContainer';
-import SegmentedControl from '@components/SegmentedControl';
+import SelectionModal from '@components/SelectionModal';
+import { DropdownChip, StatusChip } from '@components/ui';
 import { useAuth } from '@context/AuthContext';
 import { useBloom } from '@context/BloomContext';
 import { useChat } from '@context/ChatContext';
 import { UserEvent, useEvents } from '@context/EventsContext';
 import { usePush } from '@context/PushContext';
+import { useDiscoverLocation } from '@hooks/useDiscoverLocation';
+import { useDiscoverLocationSheet } from '@hooks/useDiscoverLocationSheet';
 import { useLocationPermissionPrompt } from '@hooks/useLocationPermissionPrompt';
 import { useTabbedPages } from '@hooks/useTabbedPages';
 import { useViewerLocation } from '@hooks/useViewerLocation';
 import { RootStackParamList, RootTabParamList } from '@navigation/types';
-import { colors, spacing, typography } from '@theme/index';
-import {
-  EventWithDistance,
-  LOCAL_RADIUS_KM,
-  sortByDistance,
-  withEventDistances,
-} from '@utils/eventDiscovery';
+import { colors, componentTokens, spacing, typography } from '@theme/index';
+import { EventWithDistance, LOCAL_RADIUS_KM, withEventDistances } from '@utils/eventDiscovery';
 
 const isLocalOrViewerOwnedEvent = (event: EventWithDistance<UserEvent>, viewerUserId?: number) =>
   (event.distanceKm != null && event.distanceKm <= LOCAL_RADIUS_KM) ||
   (viewerUserId != null && event.ownerId === viewerUserId);
 
-type SortOptionValue = 'upcoming' | 'nearest' | 'newest';
+type SortOptionValue = 'upcoming' | 'newest';
 type NotificationNotice = 'unavailable';
 
-const baseSortOptions: Array<{ label: string; value: SortOptionValue }> = [
+// Shown as one dropdown chip whose sheet lists both. Distance is not a sort:
+// both sorts show plans near the viewer, measured from
+// the precise device location when shared, else the approximate network area
+// (useDiscoverLocation). The Nearby chip switches precise location on and off.
+const sortOptions: Array<{ label: string; value: SortOptionValue }> = [
   { label: 'Upcoming', value: 'upcoming' },
-  { label: 'Newest', value: 'newest' },
-];
-
-const locationSortOptions: Array<{ label: string; value: SortOptionValue }> = [
-  { label: 'Upcoming', value: 'upcoming' },
-  { label: 'Nearest', value: 'nearest' },
   { label: 'Newest', value: 'newest' },
 ];
 
@@ -91,6 +88,12 @@ const HomeScreen = () => {
   const requestLocationPermission = viewerLocation.requestPermission;
   const { offer: offerLocationPermission, sheetProps: locationPermissionSheetProps } =
     useLocationPermissionPrompt(requestLocationPermission);
+  const discoverLocation = useDiscoverLocation(viewerLocation);
+  const {
+    onChipPress: handleNearbyChipPress,
+    isNearbyActive,
+    sheetProps: discoverLocationSheetProps,
+  } = useDiscoverLocationSheet({ discoverLocation, viewerLocation });
   const isFocused = useIsFocused();
   const insets = useSafeAreaInsets();
   const [headerHeight, setHeaderHeight] = useState(0);
@@ -166,27 +169,29 @@ const HomeScreen = () => {
     [user, joinedEventIds, isEventRequested],
   );
 
-  const hasViewerLocation = viewerLocation.coords != null;
-  const sortOptions = useMemo(
-    () => (hasViewerLocation ? locationSortOptions : baseSortOptions),
-    [hasViewerLocation],
-  );
-  // The hook drops back to Upcoming on its own when Nearest disappears with
-  // location permission, so no bespoke reset effect is needed here.
   const { pagerProps, tabsProps } = useTabbedPages(sortOptions, 'upcoming');
+  const [isSortSheetVisible, setIsSortSheetVisible] = useState(false);
+  const sortLabel =
+    sortOptions.find((option) => option.value === tabsProps.value)?.label ?? sortOptions[0].label;
+  const selectSort = tabsProps.onChange;
+  const openSortSheet = useCallback(() => setIsSortSheetVisible(true), []);
+  // Create Event's pill sheet without Done: a tap applies the sort and closes.
+  const handleSortSelect = useCallback(
+    (option: (typeof sortOptions)[number]) => {
+      selectSort(option.value);
+      setIsSortSheetVisible(false);
+    },
+    [selectSort],
+  );
 
   const discoverableEvents = useMemo(() => {
-    if (viewerLocation.isLoading) {
+    if (discoverLocation.isLoading || !discoverLocation.coords) {
       return null;
     }
-
-    if (!viewerLocation.coords) {
-      return null;
-    }
-    return withEventDistances(allEvents, viewerLocation.coords).filter((event) =>
+    return withEventDistances(allEvents, discoverLocation.coords).filter((event) =>
       isLocalOrViewerOwnedEvent(event, user?.id),
     );
-  }, [allEvents, user?.id, viewerLocation.coords, viewerLocation.isLoading]);
+  }, [allEvents, user?.id, discoverLocation.coords, discoverLocation.isLoading]);
 
   const upcomingSections = useMemo<EventSection[]>(() => {
     if (!discoverableEvents) {
@@ -209,18 +214,6 @@ const HomeScreen = () => {
     return buildSingleEventSection('Newest created', sorted, getBadgeLabel);
   }, [allEvents, discoverableEvents, getBadgeLabel]);
 
-  const nearestSections = useMemo<EventSection[]>(() => {
-    if (!discoverableEvents) {
-      return [];
-    }
-
-    const knownDistanceEvents: Array<EventWithDistance<UserEvent>> = [...discoverableEvents].sort(
-      sortByDistance,
-    );
-
-    return buildSingleEventSection('Nearest', knownDistanceEvents, getBadgeLabel);
-  }, [discoverableEvents, getBadgeLabel]);
-
   useEffect(() => {
     if (!isLoading && !hasSignalledReady.current) {
       hasSignalledReady.current = true;
@@ -236,11 +229,13 @@ const HomeScreen = () => {
     let isCancelled = false;
     hasStartedPermissionSequence.current = true;
 
+    // Location first: it changes this screen straight away (Nearby turns on),
+    // while a new user has nothing to be notified about yet.
     const requestStartupPermissions = async () => {
-      await requestPushPermission();
+      // Location is explained in a sheet first; Continue leads to the system prompt.
+      await offerLocationPermission();
       if (!isCancelled) {
-        // Location is explained in a sheet first; Continue leads to the system prompt.
-        await offerLocationPermission();
+        await requestPushPermission();
       }
     };
 
@@ -260,7 +255,6 @@ const HomeScreen = () => {
   const showAllEventsLoading = !hasLoadedEvents && !error;
   const showAllEventsError = !!error && !isLoading && allEvents.length === 0;
   const showUpcomingEmpty = hasLoadedEvents && !error && upcomingSections.length === 0;
-  const showNearestEmpty = hasLoadedEvents && !error && nearestSections.length === 0;
   const showNewestEmpty = hasLoadedEvents && !error && newestSections.length === 0;
 
   const refreshAll = useCallback(
@@ -268,12 +262,14 @@ const HomeScreen = () => {
     [refreshEvents, refreshRequestedEvents],
   );
 
+  const retryDiscoverLocation = discoverLocation.retry;
   const handleRefresh = useCallback(() => {
     setIsPullRefreshing(true);
+    retryDiscoverLocation();
     refreshAll()
       .catch(() => undefined)
       .finally(() => setIsPullRefreshing(false));
-  }, [refreshAll]);
+  }, [refreshAll, retryDiscoverLocation]);
 
   useEffect(() => {
     if (!isFocused) {
@@ -314,7 +310,13 @@ const HomeScreen = () => {
             topPadding={headerHeight}
           />
         ) : (
-          <AnimatedPager {...pagerProps} style={styles.pager} isActive={isFocused}>
+          <AnimatedPager
+            {...pagerProps}
+            style={styles.pager}
+            isActive={isFocused}
+            // The sort is a closed menu, so the list never changes under it by swipe.
+            swipeEnabled={false}
+          >
             <EventListPage
               sections={upcomingSections}
               onEventPress={handleEventPress}
@@ -325,18 +327,6 @@ const HomeScreen = () => {
               refreshing={isPullRefreshing}
               onRefresh={handleRefresh}
             />
-            {hasViewerLocation ? (
-              <EventListPage
-                sections={nearestSections}
-                onEventPress={handleEventPress}
-                headerPaddingTop={headerHeight}
-                emptyStateTopPadding={emptyStateTopPadding}
-                bottomInset={insets.bottom}
-                emptyState={showNearestEmpty ? discoverEmptyState : null}
-                refreshing={isPullRefreshing}
-                onRefresh={handleRefresh}
-              />
-            ) : null}
             <EventListPage
               sections={newestSections}
               onEventPress={handleEventPress}
@@ -358,7 +348,19 @@ const HomeScreen = () => {
             <Text style={styles.headerTitle}>Discover</Text>
           </View>
           <View style={styles.filtersRow}>
-            <SegmentedControl {...tabsProps} />
+            <StatusChip
+              label="Nearby"
+              active={isNearbyActive}
+              onPress={handleNearbyChipPress}
+              testID="discover-location-chip"
+            />
+            <DropdownChip
+              label={sortLabel}
+              onPress={openSortSheet}
+              active
+              accessibilityPrefix="Sort"
+              testID="discover-sort-chip"
+            />
           </View>
         </View>
       </View>
@@ -411,6 +413,18 @@ const HomeScreen = () => {
         onFinished={() => setShowWelcomeConfetti(false)}
       />
       <LocationPermissionSheet {...locationPermissionSheetProps} />
+      <DiscoverLocationSheet {...discoverLocationSheetProps} />
+      <SelectionModal
+        visible={isSortSheetVisible}
+        title="Sort by"
+        options={sortOptions}
+        selectedValue={tabsProps.value}
+        onSelect={handleSortSelect}
+        onClose={() => setIsSortSheetVisible(false)}
+        getLabel={(option) => option.label}
+        getKey={(option) => option.value}
+        isSelected={(option, selected) => option.value === selected}
+      />
     </ScreenContainer>
   );
 };
@@ -433,6 +447,9 @@ const styles = StyleSheet.create({
     marginHorizontal: -spacing.md,
   },
   filtersRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: componentTokens.segmentedControl.gap,
     marginBottom: spacing.md,
   },
   headerSpacing: {

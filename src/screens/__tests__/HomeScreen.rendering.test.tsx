@@ -41,6 +41,7 @@ let mockTransitionComplete = false;
 let mockViewerLocation = {
   coords: null as { latitude: number; longitude: number } | null,
   permission: null as 'granted' | 'denied' | 'undetermined' | null,
+  isPromptBlocked: false,
   isLoading: false,
   requestPermission: mockRequestLocationPermission,
 };
@@ -71,6 +72,41 @@ jest.mock('@context/PushContext', () => ({
 jest.mock('@hooks/useViewerLocation', () => ({
   useViewerLocation: () => mockViewerLocation,
 }));
+const mockRetryDiscoverLocation = jest.fn();
+const mockSetNearbyEnabled = jest.fn();
+let mockDiscoverLocation = {
+  mode: 'none' as 'precise' | 'approximate' | 'none',
+  coords: null as { latitude: number; longitude: number } | null,
+  isLoading: false,
+  isNearbyEnabled: true,
+  setNearbyEnabled: mockSetNearbyEnabled,
+  retry: mockRetryDiscoverLocation,
+};
+jest.mock('@hooks/useDiscoverLocation', () => ({
+  useDiscoverLocation: () => mockDiscoverLocation,
+}));
+jest.mock('@components/location-permission/DiscoverLocationSheet', () => {
+  const { Pressable, Text, View } = require('react-native');
+  return {
+    __esModule: true,
+    default: ({
+      visible,
+      variant,
+      onConfirm,
+    }: {
+      visible: boolean;
+      variant: string;
+      onConfirm: () => void;
+    }) =>
+      visible ? (
+        <View testID="discover-location-sheet" accessibilityHint={variant}>
+          <Pressable testID="discover-location-confirm" onPress={onConfirm}>
+            <Text>Confirm</Text>
+          </Pressable>
+        </View>
+      ) : null,
+  };
+});
 jest.mock('@react-navigation/bottom-tabs', () => {
   const actual = jest.requireActual('@react-navigation/bottom-tabs');
   return {
@@ -81,10 +117,21 @@ jest.mock('@react-navigation/bottom-tabs', () => {
 
 jest.mock('@components/EmptyState', () => {
   const { View, Text } = require('react-native');
-  return ({ title, description }: { title: string; description: string }) => (
+  return ({
+    title,
+    description,
+    actionLabel,
+    onActionPress,
+  }: {
+    title: string;
+    description: string;
+    actionLabel?: string;
+    onActionPress?: () => void;
+  }) => (
     <View testID="empty-state">
       <Text testID="empty-state-title">{title}</Text>
       <Text testID="empty-state-description">{description}</Text>
+      {actionLabel ? <Text onPress={onActionPress}>{actionLabel}</Text> : null}
     </View>
   );
 });
@@ -112,31 +159,17 @@ jest.mock('@components/AnimatedPager', () => {
   };
 });
 
-jest.mock('@components/SegmentedControl', () => {
-  const React = require('react');
-  const { Pressable, Text, View } = require('react-native');
+jest.mock('@components/BottomSheetModal', () => {
+  const { View } = require('react-native');
   return ({
-    options,
-    value,
-    onChange,
+    visible,
+    children,
+    testID,
   }: {
-    options: Array<{ label: string; value: string }>;
-    value: string;
-    onChange: (value: string) => void;
-  }) => (
-    <View>
-      {options.map((option) => (
-        <Pressable
-          key={option.value}
-          testID={`segment-${option.value}`}
-          accessibilityState={{ selected: option.value === value }}
-          onPress={() => onChange(option.value)}
-        >
-          <Text>{option.label}</Text>
-        </Pressable>
-      ))}
-    </View>
-  );
+    visible: boolean;
+    children: React.ReactNode;
+    testID?: string;
+  }) => (visible ? <View testID={testID}>{children}</View> : null);
 });
 
 jest.mock('@components/EventActionOverlay', () => {
@@ -185,13 +218,22 @@ describe('HomeScreen Rendering', () => {
     mockViewerLocation = {
       coords: null,
       permission: null,
+      isPromptBlocked: false,
       isLoading: false,
       requestPermission: mockRequestLocationPermission,
+    };
+    mockDiscoverLocation = {
+      mode: 'none',
+      coords: null,
+      isLoading: false,
+      isNearbyEnabled: true,
+      setNearbyEnabled: mockSetNearbyEnabled,
+      retry: mockRetryDiscoverLocation,
     };
     mockRoute.params = {};
   });
 
-  it('waits for the splash handoff, then asks for push and offers the location sheet in order', async () => {
+  it('waits for the splash handoff, then offers the location sheet before asking for push', async () => {
     const view = render(<HomeScreen />);
 
     expect(mockRequestPushPermission).not.toHaveBeenCalled();
@@ -200,10 +242,10 @@ describe('HomeScreen Rendering', () => {
     mockTransitionComplete = true;
     view.rerender(<HomeScreen />);
 
-    await waitFor(() => expect(mockOfferLocationPermission).toHaveBeenCalledTimes(1));
-    expect(mockRequestPushPermission).toHaveBeenCalledTimes(1);
-    expect(mockRequestPushPermission.mock.invocationCallOrder[0]).toBeLessThan(
-      mockOfferLocationPermission.mock.invocationCallOrder[0],
+    await waitFor(() => expect(mockRequestPushPermission).toHaveBeenCalledTimes(1));
+    expect(mockOfferLocationPermission).toHaveBeenCalledTimes(1);
+    expect(mockOfferLocationPermission.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRequestPushPermission.mock.invocationCallOrder[0],
     );
     // The system prompt is only reached through the sheet's Continue.
     expect(mockRequestLocationPermission).not.toHaveBeenCalled();
@@ -250,8 +292,7 @@ describe('HomeScreen Rendering', () => {
     });
 
     it('renders events while viewer location is still loading', () => {
-      mockViewerLocation.isLoading = true;
-      mockViewerLocation.coords = null;
+      mockDiscoverLocation.isLoading = true;
 
       const { getAllByTestId, queryByTestId } = render(<HomeScreen />);
 
@@ -361,46 +402,50 @@ describe('HomeScreen Rendering', () => {
   });
 
   describe('Sort Toggle', () => {
-    it('renders segmented control with sort options', () => {
-      const { getByTestId } = render(<HomeScreen />);
-      expect(getByTestId('segment-upcoming')).toBeTruthy();
-      expect(getByTestId('segment-newest')).toBeTruthy();
+    it('shows the sort as one dropdown chip that defaults to Upcoming', () => {
+      const { getByTestId, queryByTestId } = render(<HomeScreen />);
+      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Upcoming');
+      expect(queryByTestId('option-upcoming')).toBeNull();
     });
 
-    it('hides nearest sort mode when viewer location is unavailable', () => {
-      const { queryByTestId } = render(<HomeScreen />);
-      expect(queryByTestId('segment-nearest')).toBeNull();
+    it('lists Upcoming and Newest as pills in the sort sheet, the current one selected', () => {
+      const { getByTestId, queryByTestId } = render(<HomeScreen />);
+
+      fireEvent.press(getByTestId('discover-sort-chip'));
+
+      expect(getByTestId('option-upcoming').props.accessibilityState.selected).toBe(true);
+      expect(getByTestId('option-newest').props.accessibilityState.selected).toBe(false);
+      expect(queryByTestId('option-nearest')).toBeNull();
     });
 
-    it('defaults to upcoming sort mode', () => {
-      const { getByTestId } = render(<HomeScreen />);
-      expect(getByTestId('segment-upcoming').props.accessibilityState.selected).toBe(true);
+    it('applies the sort on tap and closes, with no Done button', () => {
+      const { getByTestId, queryByTestId } = render(<HomeScreen />);
+
+      fireEvent.press(getByTestId('discover-sort-chip'));
+      expect(queryByTestId('selection-modal-confirm')).toBeNull();
+      fireEvent.press(getByTestId('option-newest'));
+
+      expect(queryByTestId('option-newest')).toBeNull();
+      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest');
     });
 
     it('switches to newest mode and shows Newest Created section header', () => {
       mockEventsValue.events = [
         createTodayEvent({ id: '100', createdAt: new Date().toISOString() }),
       ];
-      const { getByTestId, getAllByText, queryByText } = render(<HomeScreen />);
+      const { getByTestId, getAllByText, queryByText, queryByTestId } = render(<HomeScreen />);
       expect(getAllByText('Today')[0]).toBeTruthy();
-      fireEvent.press(getByTestId('segment-newest'));
-      expect(getByTestId('segment-newest').props.accessibilityState.selected).toBe(true);
+      fireEvent.press(getByTestId('discover-sort-chip'));
+      fireEvent.press(getByTestId('option-newest'));
+      expect(queryByTestId('option-newest')).toBeNull();
+      expect(getByTestId('discover-sort-chip')).toHaveTextContent('Newest');
       expect(getAllByText('Newest created')[0]).toBeTruthy();
       expect(queryByText('Today')).toBeNull();
     });
 
-    it('shows nearest sort mode when viewer location is available', () => {
-      mockViewerLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
-      mockViewerLocation.permission = 'granted';
-
-      const { getByTestId } = render(<HomeScreen />);
-
-      expect(getByTestId('segment-nearest')).toBeTruthy();
-    });
-
     it('only shows nearby events when location is available', () => {
-      mockViewerLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
-      mockViewerLocation.permission = 'granted';
+      mockDiscoverLocation.mode = 'precise';
+      mockDiscoverLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
       mockEventsValue.events = [
         createTodayEvent({
           id: 'blr',
@@ -433,8 +478,8 @@ describe('HomeScreen Rendering', () => {
     });
 
     it('keeps viewer-owned events visible even when they are beyond the local radius', () => {
-      mockViewerLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
-      mockViewerLocation.permission = 'granted';
+      mockDiscoverLocation.mode = 'precise';
+      mockDiscoverLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
       mockEventsValue.events = [
         createTodayEvent({
           id: 'owned-dub',
@@ -459,9 +504,9 @@ describe('HomeScreen Rendering', () => {
       expect(queryByText('Other Dublin Meetup')).toBeNull();
     });
 
-    it('sorts nearest mode by distance and excludes far non-owned or missing-coordinate events', () => {
-      mockViewerLocation.coords = { latitude: 12.9716, longitude: 77.5946 };
-      mockViewerLocation.permission = 'granted';
+    it('filters by the approximate area when precise location is not in use', () => {
+      mockDiscoverLocation.mode = 'approximate';
+      mockDiscoverLocation.coords = { latitude: 53.35, longitude: -6.23 };
       mockEventsValue.events = [
         createTodayEvent({
           id: 'dub',
@@ -473,36 +518,72 @@ describe('HomeScreen Rendering', () => {
         createTodayEvent({
           id: 'blr',
           title: 'Bangalore Coffee',
+          ownerId: 2,
           latitude: 12.975,
           longitude: 77.6,
         }),
-        createTodayEvent({
-          id: 'unknown',
-          title: 'Mystery Hangout',
-          ownerId: 2,
-        }),
-        createTodayEvent({
-          id: 'owned-dub',
-          title: 'My Dublin Meetup',
-          ownerId: mockUser.id,
-          latitude: 53.3498,
-          longitude: -6.2603,
-        }),
       ];
 
-      const { getByTestId, UNSAFE_getAllByType, queryByText } = render(<HomeScreen />);
+      const { getByText, queryByText } = render(<HomeScreen />);
 
-      fireEvent.press(getByTestId('segment-nearest'));
+      expect(getByText('Dublin Pint')).toBeTruthy();
+      expect(queryByText('Bangalore Coffee')).toBeNull();
+    });
+  });
 
+  describe('Nearby chip', () => {
+    it.each([
+      ['precise', true],
+      ['approximate', false],
+      ['none', false],
+    ] as const)('in %s mode is on: %s', (mode, on) => {
+      mockDiscoverLocation.mode = mode;
+      const { getByTestId } = render(<HomeScreen />);
+      const chip = getByTestId('discover-location-chip');
+      expect(chip).toHaveTextContent('Nearby');
+      expect(chip.props.accessibilityState).toEqual(expect.objectContaining({ checked: on }));
+    });
+
+    it('switches Nearby off with one tap when it is on', () => {
+      mockDiscoverLocation.mode = 'precise';
+      mockViewerLocation.permission = 'granted';
+      const { getByTestId, queryByTestId } = render(<HomeScreen />);
+
+      fireEvent.press(getByTestId('discover-location-chip'));
+
+      expect(mockSetNearbyEnabled).toHaveBeenCalledWith(false);
+      expect(queryByTestId('discover-location-sheet')).toBeNull();
+    });
+
+    it('asks for location when permission is not given', () => {
+      mockDiscoverLocation.mode = 'approximate';
+      mockViewerLocation.permission = 'denied';
+      const { getByTestId } = render(<HomeScreen />);
+
+      fireEvent.press(getByTestId('discover-location-chip'));
+
+      expect(getByTestId('discover-location-sheet').props.accessibilityHint).toBe('permission');
+      expect(mockSetNearbyEnabled).not.toHaveBeenCalled();
+    });
+
+    it('points to Settings after a refusal', () => {
+      mockDiscoverLocation.mode = 'approximate';
+      mockViewerLocation.permission = 'denied';
+      mockViewerLocation.isPromptBlocked = true;
+      const { getByTestId } = render(<HomeScreen />);
+
+      fireEvent.press(getByTestId('discover-location-chip'));
+
+      expect(getByTestId('discover-location-sheet').props.accessibilityHint).toBe('settings');
+    });
+
+    it('retries the approximate lookup on pull-to-refresh', async () => {
+      const { UNSAFE_getAllByType } = render(<HomeScreen />);
       const { SectionList } = require('react-native');
-      const nearestList = UNSAFE_getAllByType(SectionList)[0];
-      const renderedTitles = nearestList.props.sections.flatMap(
-        (section: { data: Array<{ title: string }> }) => section.data.map((item) => item.title),
-      );
-      expect(renderedTitles).toEqual(['Bangalore Coffee', 'My Dublin Meetup']);
-      expect(queryByText('Dublin Pint')).toBeNull();
-      expect(queryByText('Unknown distance')).toBeNull();
-      expect(queryByText('Mystery Hangout')).toBeNull();
+      await act(async () => {
+        UNSAFE_getAllByType(SectionList)[0].props.refreshControl.props.onRefresh();
+      });
+      expect(mockRetryDiscoverLocation).toHaveBeenCalledTimes(1);
     });
   });
 

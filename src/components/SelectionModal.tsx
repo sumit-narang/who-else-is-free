@@ -13,7 +13,12 @@ export type SelectionModalProps<T, Selection = T> = {
   options: readonly T[];
   selectedValue: Selection;
   onSelect: (value: T) => void;
-  onConfirm: () => void;
+  /**
+   * Renders Done, for sheets where a pill only marks a draft. Omit it when a
+   * tap applies the choice straight away; the caller then closes the sheet
+   * from `onSelect`.
+   */
+  onConfirm?: () => void;
   onClose: () => void;
   getLabel: (option: T) => string;
   getKey: (option: T) => string;
@@ -40,7 +45,7 @@ export function SelectionModalContent<T, Selection = T>({
 }: SelectionModalContentProps<T, Selection>) {
   return (
     <>
-      <View style={styles.chipsContainer}>
+      <View style={[styles.chipsContainer, !onConfirm && styles.chipsContainerLast]}>
         {options.map((option) => {
           const selected = isSelected(option, selectedValue);
           return (
@@ -63,21 +68,25 @@ export function SelectionModalContent<T, Selection = T>({
         })}
       </View>
       {helperText && <Text style={[styles.chipText, styles.helperText]}>{helperText}</Text>}
-      <Pressable
-        style={[styles.selectButton, confirmDisabled && styles.selectButtonDisabled]}
-        disabled={confirmDisabled}
-        accessibilityState={{ disabled: confirmDisabled }}
-        onPress={() => {
-          triggerHaptic('light');
-          onConfirm();
-        }}
-        testID="selection-modal-confirm"
-        accessibilityRole="button"
-      >
-        <Text style={[styles.selectButtonText, confirmDisabled && styles.selectButtonTextDisabled]}>
-          Done
-        </Text>
-      </Pressable>
+      {onConfirm ? (
+        <Pressable
+          style={[styles.selectButton, confirmDisabled && styles.selectButtonDisabled]}
+          disabled={confirmDisabled}
+          accessibilityState={{ disabled: confirmDisabled }}
+          onPress={() => {
+            triggerHaptic('light');
+            onConfirm();
+          }}
+          testID="selection-modal-confirm"
+          accessibilityRole="button"
+        >
+          <Text
+            style={[styles.selectButtonText, confirmDisabled && styles.selectButtonTextDisabled]}
+          >
+            Done
+          </Text>
+        </Pressable>
+      ) : null}
     </>
   );
 }

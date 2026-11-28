@@ -1,3 +1,5 @@
+import { AppState, Platform } from 'react-native';
+
 import { act, renderHook, waitFor } from '@testing-library/react-native';
 
 import { useViewerLocation } from '../useViewerLocation';
@@ -134,5 +136,116 @@ describe('useViewerLocation', () => {
 
     expect(mockRequestForegroundPermissionsAsync).not.toHaveBeenCalled();
     expect(result.current.permission).toBe('granted');
+  });
+
+  describe('isPromptBlocked', () => {
+    const originalOS = Platform.OS;
+    const blocked = { status: 'denied', granted: false, canAskAgain: false };
+
+    afterEach(() => {
+      Platform.OS = originalOS;
+    });
+
+    it('trusts iOS without asking', async () => {
+      Platform.OS = 'ios';
+      mockGetForegroundPermissionsAsync.mockResolvedValue(blocked);
+
+      const { result } = renderHook(() => useViewerLocation());
+
+      await waitFor(() => expect(result.current.isPromptBlocked).toBe(true));
+    });
+
+    it('on Android, only after this session has asked', async () => {
+      Platform.OS = 'android';
+      mockGetForegroundPermissionsAsync.mockResolvedValue(blocked);
+      mockRequestForegroundPermissionsAsync.mockResolvedValue(blocked);
+
+      const { result } = renderHook(() => useViewerLocation());
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      // A restored auto-backup record can report this without any real refusal.
+      expect(result.current.isPromptBlocked).toBe(false);
+
+      await act(async () => {
+        await result.current.requestPermission();
+      });
+
+      expect(result.current.isPromptBlocked).toBe(true);
+    });
+  });
+
+  it('re-checks silently when the app returns, picking up a grant from Settings', async () => {
+    const listeners: Array<(state: string) => void> = [];
+    const addListener = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_type, listener) => {
+        listeners.push(listener as (state: string) => void);
+        return { remove: jest.fn() } as unknown as ReturnType<typeof AppState.addEventListener>;
+      });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({
+      status: 'denied',
+      granted: false,
+      canAskAgain: false,
+    });
+
+    const { result } = renderHook(() => useViewerLocation());
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.coords).toBeNull();
+
+    mockGetForegroundPermissionsAsync.mockResolvedValue({
+      status: 'granted',
+      granted: true,
+      canAskAgain: true,
+    });
+    await act(async () => {
+      listeners.forEach((listener) => listener('active'));
+    });
+
+    await waitFor(() =>
+      expect(result.current.coords).toEqual({ latitude: 53.3498, longitude: -6.2603 }),
+    );
+    expect(mockRequestForegroundPermissionsAsync).not.toHaveBeenCalled();
+    addListener.mockRestore();
+  });
+
+  it('notices location turned off in Settings when the app returns', async () => {
+    const listeners: Array<(state: string) => void> = [];
+    const addListener = jest
+      .spyOn(AppState, 'addEventListener')
+      .mockImplementation((_type, listener) => {
+        listeners.push(listener as (state: string) => void);
+        return { remove: jest.fn() } as unknown as ReturnType<typeof AppState.addEventListener>;
+      });
+    mockGetForegroundPermissionsAsync.mockResolvedValue({
+      status: 'granted',
+      granted: true,
+      canAskAgain: true,
+    });
+
+    const { result } = renderHook(() => useViewerLocation());
+    await waitFor(() =>
+      expect(result.current.coords).toEqual({ latitude: 53.3498, longitude: -6.2603 }),
+    );
+    const positionLoads = mockGetLastKnownPositionAsync.mock.calls.length;
+
+    // Still granted: only the status is checked, the position is not reloaded.
+    await act(async () => {
+      listeners.forEach((listener) => listener('active'));
+    });
+    expect(result.current.permission).toBe('granted');
+    expect(mockGetLastKnownPositionAsync.mock.calls.length).toBe(positionLoads);
+
+    mockGetForegroundPermissionsAsync.mockResolvedValue({
+      status: 'denied',
+      granted: false,
+      canAskAgain: false,
+    });
+    await act(async () => {
+      listeners.forEach((listener) => listener('active'));
+    });
+
+    await waitFor(() => expect(result.current.permission).toBe('denied'));
+    expect(result.current.coords).toBeNull();
+    expect(mockRequestForegroundPermissionsAsync).not.toHaveBeenCalled();
+    addListener.mockRestore();
   });
 });

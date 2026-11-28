@@ -9,6 +9,9 @@ const styles = StyleSheet.create({
     gap: 6,
     marginBottom: spacing.lg,
   },
+  chipsContainerLast: {
+    marginBottom: 0,
+  },
   chip: {
     paddingHorizontal: 10,
     paddingVertical: spacing.sm,

@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { AppState, Platform } from 'react-native';
+
 import * as Location from 'expo-location';
 
 import { logger } from '@services/logger';
@@ -12,6 +14,12 @@ export type ViewerLocationState = {
   /** ISO country code resolved from the granted device location, when available. */
   countryCode: string | null;
   permission: ViewerLocationPermission | null;
+  /**
+   * True when location is not granted and asking again would show nothing, so
+   * the person has to turn it on in Settings. On Android this is only trusted
+   * after this session has actually asked (see inspectPermission).
+   */
+  isPromptBlocked: boolean;
   isLoading: boolean;
   requestPermission: () => Promise<void>;
 };
@@ -25,9 +33,12 @@ export const useViewerLocation = (): ViewerLocationState => {
   const [coords, setCoords] = useState<Coordinates | null>(null);
   const [countryCode, setCountryCode] = useState<string | null>(null);
   const [permission, setPermission] = useState<ViewerLocationPermission | null>(null);
+  const [isPromptBlocked, setIsPromptBlocked] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const isMounted = useRef(true);
   const pendingRequest = useRef<Promise<void> | null>(null);
+  const hasAskedThisSession = useRef(false);
+  const permissionRef = useRef<ViewerLocationPermission | null>(null);
 
   const loadPosition = useCallback(async () => {
     const position =
@@ -81,11 +92,20 @@ export const useViewerLocation = (): ViewerLocationState => {
         // the OS returns immediately without showing anything.
         if (allowPrompt && !permissionResult.granted) {
           permissionResult = await Location.requestForegroundPermissionsAsync();
+          hasAskedThisSession.current = true;
         }
         if (!isMounted.current) {
           return;
         }
+        permissionRef.current = permissionResult.status;
         setPermission(permissionResult.status);
+        // A request's own answer is reliable on both platforms; iOS also
+        // reports canAskAgain truthfully without one.
+        setIsPromptBlocked(
+          !permissionResult.granted &&
+            !permissionResult.canAskAgain &&
+            (Platform.OS === 'ios' || hasAskedThisSession.current),
+        );
 
         if (permissionResult.status === Location.PermissionStatus.GRANTED) {
           await loadPosition();
@@ -127,5 +147,31 @@ export const useViewerLocation = (): ViewerLocationState => {
     };
   }, [inspectPermission]);
 
-  return { coords, countryCode, permission, isLoading, requestPermission };
+  // Pick up a permission changed in Settings when the app comes back, in either
+  // direction: iOS does not restart an app whose location access is revoked
+  // (or whose "Allow once" lapsed), so a stale grant would otherwise keep
+  // Discover on precise location. While still granted this is only the cheap
+  // status check; the position is not reloaded. Skipped while a request is
+  // open: the system dialog itself can background the app.
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (state) => {
+      if (state !== 'active' || pendingRequest.current) {
+        return;
+      }
+      if (permissionRef.current !== Location.PermissionStatus.GRANTED) {
+        void inspectPermission(false);
+        return;
+      }
+      Location.getForegroundPermissionsAsync()
+        .then((current) => {
+          if (!current.granted && isMounted.current && !pendingRequest.current) {
+            void inspectPermission(false);
+          }
+        })
+        .catch(() => undefined);
+    });
+    return () => subscription.remove();
+  }, [inspectPermission]);
+
+  return { coords, countryCode, permission, isPromptBlocked, isLoading, requestPermission };
 };

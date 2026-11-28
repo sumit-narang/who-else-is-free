@@ -20,6 +20,41 @@ export interface LocationPermissionSheetProps {
   onClosed: () => void;
 }
 
+type LocationSheetContentProps = {
+  title?: string;
+  description?: string;
+  confirmLabel?: string;
+  onConfirm: () => void;
+  onClose: () => void;
+};
+
+/**
+ * The map, copy and two buttons, shared by this sheet and Discover's Nearby
+ * chip sheet. Defaults to the permission copy with Continue/Close.
+ */
+export const LocationSheetContent = ({
+  title = LOCATION_PERMISSION_TITLE,
+  description = LOCATION_PERMISSION_DESCRIPTION,
+  confirmLabel = 'Continue',
+  onConfirm,
+  onClose,
+}: LocationSheetContentProps) => (
+  <View style={styles.content}>
+    <View style={styles.illustration}>
+      <LocationMapIllustration />
+    </View>
+    <EventActionConfirm
+      headerAlign="center"
+      title={title}
+      description={description}
+      confirmLabel={confirmLabel}
+      cancelLabel="Close"
+      onConfirm={onConfirm}
+      onCancel={onClose}
+    />
+  </View>
+);
+
 /**
  * Explains why weif asks for location before the system prompt does. The
  * system dialog itself cannot be styled on either platform, so this sheet only
@@ -37,20 +72,7 @@ const LocationPermissionSheet = ({
     onClosed={onClosed}
     testID="location-permission-sheet"
   >
-    <View style={styles.content}>
-      <View style={styles.illustration}>
-        <LocationMapIllustration />
-      </View>
-      <EventActionConfirm
-        headerAlign="center"
-        title={LOCATION_PERMISSION_TITLE}
-        description={LOCATION_PERMISSION_DESCRIPTION}
-        confirmLabel="Continue"
-        cancelLabel="Close"
-        onConfirm={onContinue}
-        onCancel={onDismiss}
-      />
-    </View>
+    <LocationSheetContent onConfirm={onContinue} onClose={onDismiss} />
   </BottomSheetModal>
 );
 
